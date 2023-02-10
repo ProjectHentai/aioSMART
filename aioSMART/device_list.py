@@ -37,8 +37,8 @@ class DeviceList(object):
     """
     Represents a list of all the storage devices connected to this computer.
     """
-
-    def __init__(self, init: bool = True, smartctl=SMARTCTL, catch_errors: bool = False):
+    @classmethod
+    async def new(cls, init: bool = True, smartctl=SMARTCTL, catch_errors: bool = False):
         """Instantiates and optionally initializes the `DeviceList`.
 
         Args:
@@ -51,7 +51,7 @@ class DeviceList(object):
                 overwritten on tests.
             catch_errors (bool, optional): If True, individual device-parsing errors will be caught
         """
-
+        self = cls()
         self.devices: List[Device] = []
         """
         **(list of `Device`):** Contains all storage devices detected during
@@ -61,7 +61,8 @@ class DeviceList(object):
         """The smartctl wrapper
         """
         if init:
-            self.initialize(catch_errors)
+            await self.initialize(catch_errors)
+        return self
 
     def __repr__(self):
         """Define a basic representation of the class object."""
@@ -95,7 +96,7 @@ class DeviceList(object):
         self.devices[:] = [v for i, v in enumerate(self.devices)
                            if i not in to_delete]
 
-    def initialize(self, catch_errors: bool = False):
+    async def initialize(self, catch_errors: bool = False):
         """
         Scans system busses for attached devices and add them to the
         `DeviceList` as `Device` objects.
@@ -110,7 +111,7 @@ class DeviceList(object):
             self.devices = []
 
         # Scan for devices
-        for line in self.smartctl.scan():
+        for line in await self.smartctl.scan():
             if not ('failed:' in line or line == ''):
                 groups = re.compile(
                     '^(\S+)\s+-d\s+(\S+)').match(line).groups()
@@ -120,7 +121,7 @@ class DeviceList(object):
                 try:
                     # Add the device to the list
                     self.devices.append(
-                        Device(name, interface=interface, smartctl=self.smartctl))
+                        await Device.new(name, interface=interface, smartctl=self.smartctl))
 
                 except Exception as e:
                     if catch_errors:

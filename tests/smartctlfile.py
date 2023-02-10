@@ -18,7 +18,7 @@
 
 import re
 import os
-from pySMART.smartctl import Smartctl
+from aioSMART.smartctl import Smartctl
 from .exceptions import SmartctlfileSampleNotFound
 from typing import Union, Tuple, List
 

@@ -40,14 +40,14 @@ class TestSingleDevice():
 
         return data
 
-    def create_device(self, folder: str, data) -> Device:
+    async def create_device(self, folder: str, data) -> Device:
         sf = SmartctlFile(folder)
 
         if 'interface' not in data:
-            return Device(data['name'], smartctl=sf)
+            return await Device.new(data['name'], smartctl=sf)
 
         else:
-            return Device(data['name'], interface=data['interface'], smartctl=sf)
+            return await Device.new(data['name'], interface=data['interface'], smartctl=sf)
 
     @pytest.mark.parametrize("folder", folders)
     def test_device_creation(self, folder):

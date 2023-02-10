@@ -15,14 +15,15 @@
 # MA  02110-1301, USA.
 #
 ################################################################
-from subprocess import Popen, PIPE
+from asyncio.subprocess import PIPE
+import asyncio
 from .utils import SMARTCTL_PATH
 from typing import List, Tuple, Union, Optional
 
 import logging
 import os
 
-logger = logging.getLogger('pySMART')
+logger = logging.getLogger('aioSMART')
 
 os.environ["LANG"] = "C"
 
@@ -87,7 +88,7 @@ class Smartctl:
         """
         self.options = self.options + new_options
 
-    def generic_call(self, params: List[str], pass_options=False) -> Tuple[List[str], int]:
+    async def generic_call(self, params: List[str], pass_options=False) -> Tuple[List[str], int]:
         """Generic smartctl query
 
         Args:
@@ -114,9 +115,9 @@ class Smartctl:
 
         logger.trace("Executing the following cmd: {0}".format(popen_list))
 
-        return self._exec(popen_list)
+        return await self._exec(popen_list)
 
-    def try_generic_call(self, params: List[str], pass_options=False) -> Tuple[List[str], int]:
+    async def try_generic_call(self, params: List[str], pass_options=False) -> Tuple[List[str], int]:
         """Generic smartctl query
            However, if the command fails or crashes, it will return an empty list and a return code of 1 instead of raising an exception
 
@@ -129,12 +130,12 @@ class Smartctl:
         """
 
         try:
-            return self.generic_call(params, pass_options)
+            return await self.generic_call(params, pass_options)
         except Exception as e:
             logger.debug(f"Exception while executing smartctl: {e}")
             return [], 1
 
-    def _exec(self, cmd: List[str]) -> Tuple[List[str], int]:
+    async def _exec(self, cmd: List[str]) -> Tuple[List[str], int]:
         """Executes a command and returns the output and the return code
 
         Args:
@@ -143,21 +144,21 @@ class Smartctl:
         Returns:
             Tuple[List[str], int]: A raw line-by-line output from smartctl and the process return code
         """
-        proc = Popen(cmd, stdout=PIPE, stderr=PIPE)
+        proc = await asyncio.create_subprocess_exec(cmd[0], *cmd[1:], stdout=PIPE, stderr=PIPE)
 
-        _stdout, _stderr = [i.decode('utf8') for i in proc.communicate()]
+        _stdout, _stderr = [i.decode('utf8') for i in await proc.communicate()]
 
         return _stdout.split('\n'), proc.returncode
 
-    def scan(self) -> List[str]:
+    async def scan(self) -> List[str]:
         """Queries smartctl with option --scan-open
 
         Returns:
             List[str]: A raw line-by-line output from smartctl
         """
-        return self.generic_call(['--scan-open'])[0]
+        return (await self.generic_call(['--scan-open']))[0]
 
-    def health(self, disk: str, interface: Optional[str] = None) -> List[str]:
+    async def health(self, disk: str, interface: Optional[str] = None) -> List[str]:
         """Queries smartctl with option --health
 
         Args:
@@ -168,11 +169,11 @@ class Smartctl:
             List[str]: A raw line-by-line output from smartctl
         """
         if interface:
-            return self.generic_call(['-d', interface, '--health', disk])[0]
+            return (await self.generic_call(['-d', interface, '--health', disk]))[0]
         else:
-            return self.generic_call(['--health', disk])[0]
+            return (await self.generic_call(['--health', disk]))[0]
 
-    def info(self, disk: str, interface: Optional[str] = None) -> List[str]:
+    async def info(self, disk: str, interface: Optional[str] = None) -> List[str]:
         """Queries smartctl with option --info
 
         Args:
@@ -184,11 +185,11 @@ class Smartctl:
         """
 
         if interface:
-            return self.generic_call(['-d', interface, '--info', disk], pass_options=True)[0]
+            return (await self.generic_call(['-d', interface, '--info', disk], pass_options=True))[0]
         else:
-            return self.generic_call(['--info', disk], pass_options=True)[0]
+            return (await self.generic_call(['--info', disk], pass_options=True))[0]
 
-    def all(self, disk: str, interface: Optional[str] = None) -> List[str]:
+    async def all(self, disk: str, interface: Optional[str] = None) -> List[str]:
         """Queries smartctl with option --all
 
         Args:
@@ -200,11 +201,11 @@ class Smartctl:
         """
 
         if interface:
-            return self.generic_call(['-d', interface, '--all', disk], pass_options=True)[0]
+            return (await self.generic_call(['-d', interface, '--all', disk], pass_options=True))[0]
         else:
-            return self.generic_call(['--all', disk], pass_options=True)[0]
+            return (await self.generic_call(['--all', disk], pass_options=True))[0]
 
-    def test_stop(self, disk_type: str, disk: str) -> int:
+    async def test_stop(self, disk_type: str, disk: str) -> int:
         """Queries smartctl with option -X
 
         Args:
@@ -214,9 +215,9 @@ class Smartctl:
         Returns:
             int: the smartctl process return code
         """
-        return self.generic_call(['-d', disk_type, '-X', disk])[1]
+        return (await self.generic_call(['-d', disk_type, '-X', disk]))[1]
 
-    def test_start(self, disk_type: str, test_type: str, disk: str) -> Tuple[List[str], int]:
+    async def test_start(self, disk_type: str, test_type: str, disk: str) -> Tuple[List[str], int]:
         """Queries smartctl with option -t <test_type>
 
         Args:
@@ -227,7 +228,7 @@ class Smartctl:
         Returns:
             Tuple[List[str], int]: A raw line-by-line output from smartctl and the process return code
         """
-        return self.generic_call(['-d', disk_type, '-t', test_type, disk])
+        return await self.generic_call(['-d', disk_type, '-t', test_type, disk])
 
 
 # A global smartctl object used as the defaults in Device and DeviceList.

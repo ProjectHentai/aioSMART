@@ -16,28 +16,29 @@
 #
 ################################################################
 
+import asyncio
 import argparse
 import json
 import sys
 import os
 from typing import Dict, Any
 
-from pySMART import Device
-from pySMART.utils import get_object_properties
+from aioSMART import Device
+from aioSMART.utils import get_object_properties
 
 from .smartctlfile import SmartctlFile
 
 
-def update_device(folder, device_name, interface_name=None):
+async def update_device(folder, device_name, interface_name=None):
     sf = SmartctlFile(folder)
 
     json_dict = {"name": device_name}
 
     if interface_name is None:
-        dev = Device(device_name, smartctl=sf)
+        dev = await Device.new(device_name, smartctl=sf)
 
     else:
-        dev = Device(device_name, interface=interface_name, smartctl=sf)
+        dev = await Device.new(device_name, interface=interface_name, smartctl=sf)
         json_dict['interface'] = interface_name
 
     json_dict['values'] = get_object_properties(dev, deep_copy=False)
@@ -89,7 +90,7 @@ def update_device(folder, device_name, interface_name=None):
         f.write(json.dumps(json_dict, indent=4))
 
 
-def main():
+async def main():
 
     parser = argparse.ArgumentParser(
         description='Generate device.json from data stored in file for future tests.')
@@ -113,7 +114,7 @@ def main():
         sys.exit(-1)
 
     elif args.updateSubfolders == False:
-        update_device(folder, device_name, interface_name)
+        await update_device(folder, device_name, interface_name)
 
     elif args.updateSubfolders == True:
         subdirs = os.listdir(folder)
@@ -132,10 +133,10 @@ def main():
 
                     # Check if interface is present
                     if 'interface' not in data:
-                        update_device(subdir, data['name'])
+                        await update_device(subdir, data['name'])
 
                     else:
-                        update_device(subdir, data['name'], data['interface'])
+                        await update_device(subdir, data['name'], data['interface'])
 
                 else:
                     print(f"Warning: {json_path} does not exists!. Skipped...")
@@ -146,4 +147,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())

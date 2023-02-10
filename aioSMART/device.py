@@ -45,7 +45,7 @@ from .utils import smartctl_type, smartctl_isvalid_type, any_in, all_in
 logger = logging.getLogger('pySMART')
 
 
-def smart_health_assement(disk_name: str, interface: Optional[str] = None, smartctl: Smartctl = SMARTCTL) -> Optional[str]:
+async def smart_health_assement(disk_name: str, interface: Optional[str] = None, smartctl: Smartctl = SMARTCTL) -> Optional[str]:
     """
     This function gets the SMART Health Status of the disk (IF the disk
     is SMART capable and smart is enabled on it else returns None).
@@ -61,7 +61,7 @@ def smart_health_assement(disk_name: str, interface: Optional[str] = None, smart
              Possible values are 'PASS', 'FAIL' or None.
     """
     assessment = None
-    raw = smartctl.health(os.path.join(
+    raw = await smartctl.health(os.path.join(
         '/dev/', disk_name.replace('nvd', 'nvme')), interface)
     line = raw[4]  # We only need this line
     if 'SMART overall-health self-assessment' in line:  # ATA devices
@@ -83,9 +83,10 @@ class Device(object):
     hard drive or DVD-ROM, and detected by smartmontools. Includes eSATA
     (considered SATA) but excludes other external devices (USB, Firewire).
     """
-
-    def __init__(self, name: str, interface: Optional[str] = None, abridged: bool = False, smart_options: Union[str, List[str], None] = None, smartctl: Smartctl = SMARTCTL):
+    @classmethod
+    async def new(cls, name: str, interface: Optional[str] = None, abridged: bool = False, smart_options: Union[str, List[str], None] = None, smartctl: Smartctl = SMARTCTL):
         """Instantiates and initializes the `pySMART.device.Device`."""
+        self = cls()
         if not (
                 interface is None or
                 smartctl_isvalid_type(interface.lower())
@@ -255,7 +256,7 @@ class Device(object):
         elif self._interface is None and not self.abridged:
             logger.trace(
                 "Determining interface of disk: {0}".format(self.name))
-            raw, returncode = self.smartctl.generic_call(
+            raw, returncode = await self.smartctl.generic_call(
                 ['-d', 'test', self.dev_reference])
 
             if len(raw) > 0:
@@ -292,10 +293,11 @@ class Device(object):
         # If a valid device was detected, populate its information
         # OR if in unabridged mode, then do it even without interface info
         if self._interface is not None or self.abridged:
-            self.update()
+            await self.update()
+        return self
 
     @property
-    def dev_interface(self) -> Optional[str]:
+    async def dev_interface(self) -> Optional[str]:
         """Returns the internal interface type of the device.
            It may not be the same as the interface type as used by smartctl.
 
@@ -304,7 +306,7 @@ class Device(object):
                  None if the interface type could not be determined.
         """
         # Try to get the fine-tuned interface type
-        fineType = self._classify()
+        fineType = await self._classify()
 
         # If return still contains a megaraid, just asume it's type
         if 'megaraid' in fineType:
@@ -478,7 +480,7 @@ class Device(object):
         del state['smart_status']
         self.__dict__.update(state)
 
-    def smart_toggle(self, action: str) -> Tuple[bool, List[str]]:
+    async def smart_toggle(self, action: str) -> Tuple[bool, List[str]]:
         """
         A basic function to enable/disable SMART on device.
 
@@ -504,16 +506,16 @@ class Device(object):
             if action_lower == 'off':
                 return True, []
         if self._interface is not None:
-            raw, returncode = self.smartctl.generic_call(
+            raw, returncode = await self.smartctl.generic_call(
                 ['-s', action_lower, '-d', self._interface, self.dev_reference])
         else:
-            raw, returncode = self.smartctl.generic_call(
+            raw, returncode = await self.smartctl.generic_call(
                 ['-s', action_lower, self.dev_reference])
 
         if returncode != 0:
             return False, raw
         # if everything worked out so far lets perform an update() and check the result
-        self.update()
+        await self.update()
         if action_lower == 'off' and self.smart_enabled:
             return False, ['Failed to turn SMART off.']
         if action_lower == 'on' and not self.smart_enabled:
@@ -571,7 +573,7 @@ class Device(object):
             no_tests = 'No self-tests have been logged for this device.'
             return no_tests
 
-    def _classify(self) -> str:
+    async def _classify(self) -> str:
         """
         Disambiguates generic device types ATA and SCSI into more specific
         ATA, SATA, SAS, SAT and SCSI.
@@ -589,7 +591,7 @@ class Device(object):
             else:
                 test = 'sat' if fine_interface == 'scsi' else 'sata'
             # Look for a SATA PHY to detect SAT and SATA
-            raw, returncode = self.smartctl.try_generic_call([
+            raw, returncode = await self.smartctl.try_generic_call([
                 '-d',
                 smartctl_type(test),
                 '-l',
@@ -601,7 +603,7 @@ class Device(object):
         # If device type is still SCSI (not changed to SAT above), then
         # check for a SAS PHY
         if fine_interface in ['scsi'] or 'megaraid' in fine_interface:
-            raw, returncode = self.smartctl.try_generic_call([
+            raw, returncode = await self.smartctl.try_generic_call([
                 '-d',
                 smartctl_type(fine_interface),
                 '-l',
@@ -612,7 +614,7 @@ class Device(object):
             # Some older SAS devices do not support the SAS PHY log command.
             # For these, see if smartmontools reports a transport protocol.
             else:
-                raw = self.smartctl.all(self.dev_reference, fine_interface)
+                raw = await self.smartctl.all(self.dev_reference, fine_interface)
 
                 for line in raw:
                     if 'Transport protocol' in line and 'SAS' in line:
@@ -655,7 +657,7 @@ class Device(object):
                     if not self.assessment == 'FAIL':
                         self.assessment = 'WARN'
 
-    def get_selftest_result(self, output=None):
+    async def get_selftest_result(self, output=None):
         """
         Refreshes a device's `pySMART.device.Device.tests` attribute to obtain
         the latest test results. If a new test result is obtained, its content
@@ -696,7 +698,7 @@ class Device(object):
             _last_entry = self.tests[_len - 1]
         else:
             _len = 0
-        self.update()
+        await self.update()
         # Since I have changed the update() parsing to DTRT to pickup currently
         # running selftests we can now purely rely on that for self._test_running
         # Thus check for that variable first and return if it is True with appropos message.
@@ -726,7 +728,7 @@ class Device(object):
         else:
             return 2, 'No new self-test results found.', None
 
-    def abort_selftest(self):
+    async def abort_selftest(self):
         """
         Aborts non-captive SMART Self Tests.   Note that this command
         will  abort the Offline Immediate Test routine only if your disk
@@ -737,9 +739,9 @@ class Device(object):
         # Returns:
         * **(int):** The returncode of calling `smartctl -X device_path`
         """
-        return self.smartctl.test_stop(smartctl_type(self._interface), self.dev_reference)
+        return await self.smartctl.test_stop(smartctl_type(self._interface), self.dev_reference)
 
-    def run_selftest(self, test_type, ETA_type='date'):
+    async def run_selftest(self, test_type, ETA_type='date'):
         """
         Instructs a device to begin a SMART self-test. All tests are run in
         'offline' / 'background' mode, allowing normal use of the device while
@@ -801,7 +803,7 @@ class Device(object):
         except KeyError:
             return 2, "Unknown test type '{0}' requested.".format(test_type), None
 
-        raw, rc = self.smartctl.test_start(
+        raw, rc = await self.smartctl.test_start(
             interface, test_type, self.dev_reference)
         _success = False
         _running = False
@@ -911,7 +913,7 @@ class Device(object):
             return selftest_return_value, str(self.tests[0]) if output == 'str' else self.tests[0]
         return selftest_results[:2]
 
-    def update(self):
+    async def update(self):
         """
         Queries for device information using smartctl and updates all
         class members, including the SMART attribute table and self-test log.
@@ -925,11 +927,11 @@ class Device(object):
         self.temperatures = {}
         if self.abridged:
             interface = None
-            raw = self.smartctl.info(self.dev_reference)
+            raw = await self.smartctl.info(self.dev_reference)
 
         else:
             interface = smartctl_type(self._interface)
-            raw = self.smartctl.all(
+            raw = await self.smartctl.all(
                 self.dev_reference, interface)
 
         parse_self_tests = False
@@ -1021,7 +1023,7 @@ class Device(object):
                     # # 1  Extended offline    Completed without error       00%     46660         -
                     format = 'ata'
                     parsed = re.compile(
-                        r'^[#\s]*([^\s]+)\s{2,}(.*[^\s])\s{2,}(.*[^\s])\s{1,}(.*[^\s])\s{2,}(.*[^\s])\s{2,}(.*[^\s])$').match(line).groups()
+                        r'^[#\s]*([^\s]+)\s{2,}(.*[^\s])\s{2,}(.*[^\s])\s{1,}(.*[^\s])\s{2,}(.*[^\s])\s{2,}(.*)$').match(line).groups()
                     num = parsed[0]
                     test_type = parsed[1]
                     status = parsed[2]
@@ -1355,7 +1357,7 @@ class Device(object):
                 # If not obtained Power_On_Hours above, make a direct attempt to extract power on
                 # hours from the background scan results log.
                 if self.diagnostics.Power_On_Hours is None:
-                    raw, returncode = self.smartctl.generic_call(
+                    raw, returncode = await self.smartctl.generic_call(
                         [
                             '-d',
                             'scsi',
