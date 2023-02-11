@@ -111,28 +111,24 @@ class DeviceList(object):
             self.devices = []
 
         # Scan for devices
-        for line in await self.smartctl.scan():
-            if not ('failed:' in line or line == ''):
-                groups = re.compile(
-                    '^(\S+)\s+-d\s+(\S+)').match(line).groups()
-                name = groups[0]
-                interface = groups[1]
+        for device in (await self.smartctl.scan())["devices"]:
+            name = device["name"]
+            interface = device["type"]
+            try:
+                # Add the device to the list
+                self.devices.append(
+                    await Device.new(name, interface=interface, smartctl=self.smartctl))
 
-                try:
-                    # Add the device to the list
-                    self.devices.append(
-                        await Device.new(name, interface=interface, smartctl=self.smartctl))
+            except Exception as e:
+                if catch_errors:
+                    # Print the exception
+                    import logging
 
-                except Exception as e:
-                    if catch_errors:
-                        # Print the exception
-                        import logging
+                    logging.exception(f"Error parsing device {name}")
 
-                        logging.exception(f"Error parsing device {name}")
-
-                    else:
-                        # Reraise the exception
-                        raise e
+                else:
+                    # Reraise the exception
+                    raise e
 
         # Remove duplicates and unwanted devices (optical, etc.) from the list
         self._cleanup()

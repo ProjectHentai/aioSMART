@@ -87,6 +87,7 @@ class Device(object):
     async def new(cls, name: str, interface: Optional[str] = None, abridged: bool = False, smart_options: Union[str, List[str], None] = None, smartctl: Smartctl = SMARTCTL):
         """Instantiates and initializes the `pySMART.device.Device`."""
         self = cls()
+        self.raw_data = {}
         if not (
                 interface is None or
                 smartctl_isvalid_type(interface.lower())
@@ -389,7 +390,7 @@ class Device(object):
         Returns:
             str: The capacity in the raw smartctl format
         """
-        return self._capacity_human
+        return self._capacity
 
     @property
     def diags(self) -> Dict[str, str]:
@@ -480,7 +481,7 @@ class Device(object):
         del state['smart_status']
         self.__dict__.update(state)
 
-    async def smart_toggle(self, action: str) -> Tuple[bool, List[str]]:
+    async def smart_toggle(self, action: str) -> Tuple[bool, Union[dict, List[str]]]:
         """
         A basic function to enable/disable SMART on device.
 
@@ -575,6 +576,7 @@ class Device(object):
 
     async def _classify(self) -> str:
         """
+        # todo with json format
         Disambiguates generic device types ATA and SCSI into more specific
         ATA, SATA, SAS, SAT and SCSI.
         """
@@ -615,10 +617,8 @@ class Device(object):
             # For these, see if smartmontools reports a transport protocol.
             else:
                 raw = await self.smartctl.all(self.dev_reference, fine_interface)
-
-                for line in raw:
-                    if 'Transport protocol' in line and 'SAS' in line:
-                        fine_interface = 'sas'
+                if raw["device"]["protocol"] == 'SAS':
+                    fine_interface = 'sas'
 
         return fine_interface
 
@@ -931,54 +931,85 @@ class Device(object):
 
         else:
             interface = smartctl_type(self._interface)
-            raw = await self.smartctl.all(
+            stdout = await self.smartctl.all(
                 self.dev_reference, interface)
+            self.raw_data.update(stdout)
 
-        parse_self_tests = False
-        parse_running_test = False
-        parse_ascq = False
+        # parse_self_tests = False
+        # parse_running_test = False
+        # parse_ascq = False
         message = ''
         self.tests = []
         self._test_running = False
         self._test_progress = None
         # Lets skip the first couple of non-useful lines
-        _stdout = raw[4:]
 
         #######################################
         #           Encoding fixing           #
         #######################################
         # In some scenarios, smartctl returns some lines with a different/strange encoding
         # This is a workaround to fix that
-        for i, line in enumerate(_stdout):
-            # character ' ' (U+202F) should be removed
-            _stdout[i] = line.replace('\u202f', '')
 
         #######################################
         #   Dedicated interface attributes    #
         #######################################
 
         if interface == 'nvme':
-            self.if_attributes = NvmeAttributes(iter(_stdout))
+            self.if_attributes = NvmeAttributes(stdout)
         else:
             self.if_attributes = None
 
         #######################################
         #    Global / generic  attributes     #
         #######################################
-        stdout_iter = iter(_stdout)
-        for line in stdout_iter:
-            if line.strip() == '':  # Blank line stops sub-captures
-                if parse_self_tests is True:
-                    parse_self_tests = False
-                if parse_ascq:
-                    parse_ascq = False
-                    self.messages.append(message)
-            if parse_ascq:
-                message += ' ' + line.lstrip().rstrip()
-            if parse_self_tests:
-                num = line[0:3]
-                if '#' not in num:
-                    continue
+        self.model = stdout.get("model_name")
+        self.family = stdout.get("model_family")
+        self.serial = stdout.get("serial_number")
+        self.firmware = stdout.get("firmware_version")
+        self._capacity = stdout.get("user_capacity", {}).get("bytes")
+        self.smart_capable = stdout.get("smart_support", {}).get("available")
+        self.smart_enabled = stdout.get("smart_support", {}).get("enabled")
+        self.rotation_rate = stdout.get("rotation_rate")
+        self.is_ssd = False if self.rotation_rate else False
+        self.assessment = "PASS" if stdout.get("smart_status", {}).get("passed") else "FAIL"
+        self.test_capabilities["offline"] = stdout.get("ata_smart_data", {}).get("capabilities", {}).get(
+            "exec_offline_immediate_supported")
+        self.test_capabilities["conveyance"] = stdout.get("ata_smart_data", {}).get("capabilities", {}).get(
+            "conveyance_self_test_supported")
+        self.test_capabilities["selective"] = stdout.get("ata_smart_data", {}).get("capabilities", {}).get(
+            "selective_self_test_supported")
+        self.test_capabilities["short"] = self.test_capabilities["long"] = stdout.get("ata_smart_data", {}).get(
+            "capabilities", {}).get("self_tests_supported")
+        for smart in stdout.get("ata_smart_attributes", {}).get("table", []):
+            self.attributes[smart["id"]] = Attribute(smart["id"], smart["name"], smart["flags"]["value"],
+                                                     smart["value"], smart["worst"], smart["thresh"],
+                                                     "Pre-fail" if smart["flags"]["prefailure"] else "Old_age",
+                                                     "Always" if smart["flags"]["updated_online"] else "Offline",
+                                                     smart["when_failed"] if smart["when_failed"] else "-",
+                                                     smart["raw"]["value"])
+
+        self._test_running = True if "progress" in stdout.get("ata_smart_data", {}).get("self_test", {}).get("status",
+                                                                                                             {}).get(
+            "string", "") else False
+
+        self.temperature = stdout.get("temperature", {}).get("current")
+        self.logical_sector_size = stdout.get("logical_block_size")
+        self.physical_sector_size = stdout.get("physical_block_size")
+        # todo vendor, test entry, SCSI only
+        """
+        for line in stdout:
+            # if line.strip() == '':  # Blank line stops sub-captures
+            #     if parse_self_tests is True:
+            #         parse_self_tests = False
+            #     if parse_ascq:
+            #         parse_ascq = False
+            #         self.messages.append(message)
+            # if parse_ascq:
+            #     message += ' ' + line.lstrip().rstrip()
+            # if parse_self_tests:
+            #     num = line[0:3]
+            #     if '#' not in num:
+            #         continue
 
                 # Detect Test Format
 
@@ -988,58 +1019,58 @@ class Device(object):
                 # Num  Test              Status                 segment  LifeTime  LBA_first_err [SK ASC ASQ]
                 #      Description                              number   (hours)
                 # # 1  Background short  Completed                   -   33124                 - [-   -    -]
-                format_scsi = re.compile(
-                    r'^[#\s]*([^\s]+)\s{2,}(.*[^\s])\s{2,}(.*[^\s])\s{2,}(.*[^\s])\s{2,}(.*[^\s])\s{2,}(.*[^\s])\s+\[([^\s]+)\s+([^\s]+)\s+([^\s]+)\]$').match(line)
+            format_scsi = re.compile(
+                r'^[#\s]*([^\s]+)\s{2,}(.*[^\s])\s{2,}(.*[^\s])\s{2,}(.*[^\s])\s{2,}(.*[^\s])\s{2,}(.*[^\s])\s+\[([^\s]+)\s+([^\s]+)\s+([^\s]+)\]$').match(line)
 
-                if format_scsi is not None:
-                    format = 'scsi'
-                    parsed = format_scsi.groups()
-                    num = int(parsed[0])
-                    test_type = parsed[1]
-                    status = parsed[2]
-                    segment = parsed[3]
-                    hours = parsed[4]
-                    lba = parsed[5]
-                    sense = parsed[6]
-                    asc = parsed[7]
-                    ascq = parsed[8]
-                    self.tests.append(TestEntry(
-                        format,
-                        num,
-                        test_type,
-                        status,
-                        hours,
-                        lba,
-                        segment=segment,
-                        sense=sense,
-                        asc=asc,
-                        ascq=ascq
-                    ))
-                else:
-                    ## ATA FORMAT ##
-                    # Example smartctl output:
-                    # SMART Self-test log structure revision number 1
-                    # Num  Test_Description    Status                  Remaining  LifeTime(hours)  LBA_of_first_error
-                    # # 1  Extended offline    Completed without error       00%     46660         -
-                    format = 'ata'
-                    parsed = re.compile(
-                        r'^[#\s]*([^\s]+)\s{2,}(.*[^\s])\s{2,}(.*[^\s])\s{1,}(.*[^\s])\s{2,}(.*[^\s])\s{2,}(.*)$').match(line).groups()
-                    num = parsed[0]
-                    test_type = parsed[1]
-                    status = parsed[2]
-                    remain = parsed[3]
-                    hours = parsed[4]
-                    lba = parsed[5]
+            if format_scsi is not None:
+                format = 'scsi'
+                parsed = format_scsi.groups()
+                num = int(parsed[0])
+                test_type = parsed[1]
+                status = parsed[2]
+                segment = parsed[3]
+                hours = parsed[4]
+                lba = parsed[5]
+                sense = parsed[6]
+                asc = parsed[7]
+                ascq = parsed[8]
+                self.tests.append(TestEntry(
+                    format,
+                    num,
+                    test_type,
+                    status,
+                    hours,
+                    lba,
+                    segment=segment,
+                    sense=sense,
+                    asc=asc,
+                    ascq=ascq
+                ))
+            else:
+                ## ATA FORMAT ##
+                # Example smartctl output:
+                # SMART Self-test log structure revision number 1
+                # Num  Test_Description    Status                  Remaining  LifeTime(hours)  LBA_of_first_error
+                # # 1  Extended offline    Completed without error       00%     46660         -
+                format = 'ata'
+                parsed = re.compile(
+                    r'^[#\s]*([^\s]+)\s{2,}(.*[^\s])\s{2,}(.*[^\s])\s{1,}(.*[^\s])\s{2,}(.*[^\s])\s{2,}(.*)$').match(line).groups()
+                num = parsed[0]
+                test_type = parsed[1]
+                status = parsed[2]
+                remain = parsed[3]
+                hours = parsed[4]
+                lba = parsed[5]
 
-                    try:
-                        num = int(num)
-                    except:
-                        num = None
+                try:
+                    num = int(num)
+                except:
+                    num = None
 
-                    self.tests.append(
-                        TestEntry(format, num, test_type, status,
-                                  hours, lba, remain=remain)
-                    )
+                self.tests.append(
+                    TestEntry(format, num, test_type, status,
+                              hours, lba, remain=remain)
+                )  # todo 看看这2个test是什么
             # Basic device information parsing
             if any_in(line, 'Device Model', 'Product', 'Model Number'):
                 self.model = line.split(':')[1].lstrip().rstrip()
@@ -1120,7 +1151,6 @@ class Device(object):
                 else:
                     self.assessment = 'FAIL'
                 continue
-
             if 'SMART Health Status' in line:  # SCSI devices
                 if line.split(':')[1].strip() == 'OK':
                     self.assessment = 'PASS'
@@ -1135,7 +1165,6 @@ class Device(object):
             if 'SMART execute Offline immediate' in line:
                 self.test_capabilities['offline'] = 'No' not in line
                 continue
-
             if 'Conveyance Self-test supported' in line:
                 self.test_capabilities['conveyance'] = 'No' not in line
                 continue
@@ -1150,7 +1179,7 @@ class Device(object):
                 continue
 
             # SMART Attribute table parsing
-            if all_in(line, '0x0', '_') and not interface == 'nvme':
+            if all_in(line, '0x0', '_') and not interface == 'nvme':  # todo
                 # Replace multiple space separators with a single space, then
                 # tokenize the string on space delimiters
                 line_ = ' '.join(line.split()).split(' ')
@@ -1347,7 +1376,7 @@ class Device(object):
                 self.logical_sector_size = int(
                     line.split(':')[1].strip().split(' ')[0])
                 continue
-
+        """
         if not self.abridged:
             if not interface == 'scsi':
                 # Parse the SMART table for below-threshold attributes and create
@@ -1365,11 +1394,8 @@ class Device(object):
                             'background',
                             self.dev_reference
                         ])
+                    self.diagnostics.Power_On_Hours = raw["power_on_time"]["hours"]
 
-                    for line in raw:
-                        if 'power on time' in line:
-                            self.diagnostics.Power_On_Hours = int(
-                                line.split(':')[1].split(' ')[1])
         # map temperature
         if self.temperature is None:
             # in this case the disk is probably ata

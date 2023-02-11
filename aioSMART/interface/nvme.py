@@ -421,7 +421,6 @@ class NvmeError(object):
     def __setstate__(self, state):
         self.__dict__.update(state)
 
-
 class NvmeAttributes(object):
     """This class represents the attributes of a NVMe device
 
@@ -449,7 +448,7 @@ class NvmeAttributes(object):
         errors                   : List of errors
     """
 
-    def __init__(self, data: Iterator[str] = None):
+    def __init__(self, data: dict = None):
         """Initializes the attributes
 
         Args:
@@ -482,140 +481,29 @@ class NvmeAttributes(object):
         if data is not None:
             self.parse(data)
 
-    def parse(self, data: Iterator[str]) -> None:
+    def parse(self, data: dict) -> None:
         """Parses the attributes from the raw data
         """
 
         # Advance data until detect Nvme Log
-        for line in data:
-
-            # Smart section: 'SMART/Health Information (NVMe Log 0x02)'
-            if line.startswith('SMART/Health Information (NVMe Log 0x02)'):
-
-                # Parse attributes
-                for line in data:
-                    line = line.strip()
-
-                    if not line or len(line) == 0:
-                        break
-
-                    # Parse attribute
-                    match = re.match(
-                        r'^\s*(?P<name>.+)\s*:\s*(?P<value>.+)\s*$', line)
-                    if match:
-                        name = match.group('name')
-                        value = match.group('value')
-
-                        if name == 'Critical Warning':
-                            self.criticalWarning = int(value, 16)
-                        elif name == 'Temperature':
-                            # Check if temperature is in Celsius or Fahrenheit
-                            if value.endswith('Celsius'):
-                                self.temperature = int(value[:-7])
-                            elif value.endswith('Fahrenheit'):
-                                self.temperature = int(
-                                    (int(value[:-10]) - 32) / 1.8)
-                        elif name == 'Available Spare':
-                            self.availableSpare = int(value[:-1])
-                        elif name == 'Available Spare Threshold':
-                            self.availableSpareThreshold = int(value[:-1])
-                        elif name == 'Percentage Used':
-                            self.percentageUsed = int(value[:-1])
-                        elif name == 'Data Units Read':
-                            # Format: 1,234,567 [2.00 TB]
-                            self.dataUnitsRead = int(
-                                value.split(' ')[0].replace(',', '').replace('.', ''))
-                            self.bytesRead = humanfriendly.parse_size(
-                                value.split(' ', 1)[1][1:-1].replace(',', '.'))
-                        elif name == 'Data Units Written':
-                            # Format: 1,234,567 [2.00 TB]
-                            self.dataUnitsWritten = int(
-                                value.split(' ')[0].replace(',', '').replace('.', ''))
-                            self.bytesWritten = humanfriendly.parse_size(
-                                value.split(' ', 1)[1][1:-1].replace(',', '.'))
-                        elif name == 'Host Read Commands':
-                            self.hostReadCommands = int(
-                                value.replace(',', '').replace('.', ''))
-                        elif name == 'Host Write Commands':
-                            self.hostWriteCommands = int(
-                                value.replace(',', '').replace('.', ''))
-                        elif name == 'Controller Busy Time':
-                            self.controllerBusyTime = int(
-                                value.replace(',', '').replace('.', ''))
-                        elif name == 'Power Cycles':
-                            self.powerCycles = int(
-                                value.replace(',', '').replace('.', ''))
-                        elif name == 'Power On Hours':
-                            self.powerOnHours = int(
-                                value.replace(',', '').replace('.', ''))
-                        elif name == 'Unsafe Shutdowns':
-                            self.unsafeShutdowns = int(
-                                value.replace(',', '').replace('.', ''))
-                        elif name == 'Media and Data Integrity Errors':
-                            self.integrityErrors = int(
-                                value.replace(',', '').replace('.', ''))
-                        elif name == 'Error Information Log Entries':
-                            self.errorEntries = int(
-                                value.replace(',', '').replace('.', ''))
-                        elif name == 'Warning Comp. Temperature Time':
-                            self.warningTemperatureTime = int(
-                                value.replace(',', '').replace('.', ''))
-                        elif name == 'Critical Comp. Temperature Time':
-                            self.criticalTemperatureTime = int(
-                                value.replace(',', '').replace('.', ''))
-
-            # Smart section: Error Information (NVMe Log 0x01, <num_entries> of <max_entries> entries)
-            elif line.startswith('Error Information (NVMe Log 0x01, '):
-
-                # check next line is:
-                # Num   ErrCount  SQId   CmdId  Status  PELoc          LBA  NSID    VS
-                # but be careful with the spaces
-
-                line = next(data)
-                if not re.match(r'^\s*Num\s+ErrCount\s+SQId\s+CmdId\s+Status\s+PELoc\s+LBA\s+NSID\s+VS\s*$', line):
-                    continue
-
-                # Parse errors
-                for line in data:
-                    line = line.strip()
-
-                    if not line or len(line) == 0:
-                        break
-
-                    # Parse error
-                    # Format:    Num   ErrCount  SQId   CmdId  Status  PELoc          LBA  NSID    VS
-                    # example 1:   0       1356     0  0x0012  0xc005  0x028            -     0     -
-                    # example 2:   3          1     3  0x0045  0xc006  0x049           56     3     2
-
-                    match = re.match(
-                        r'^\s*(?P<num>\d+)\s+(?P<errCount>\d+)\s+(?P<sqId>\d+)\s+(?P<cmdId>\w+)\s+(?P<status>\w+)\s+(?P<peLoc>\w+)\s+(?P<lba>\S+)\s+(?P<nsid>\S+)\s+(?P<vs>\S+)\s*$', line)
-
-                    if match:
-                        error = NvmeError()
-
-                        error.num = int(match.group('num'))
-                        error.errCount = int(match.group('errCount'))
-                        error.sqId = int(match.group('sqId'))
-                        error.cmdId = int(match.group('cmdId'), 16)
-                        error.status = int(match.group('status'), 16)
-                        error.peLoc = int(match.group('peLoc'), 16)
-
-                        if match.group('lba') == '-':
-                            error.lba = None
-                        else:
-                            error.lba = int(match.group('lba'), 16)
-
-                        if match.group('nsid') == '-':
-                            error.nsid = None
-                        else:
-                            error.nsid = int(match.group('nsid'))
-
-                        if match.group('vs') == '-':
-                            error.vs = None
-                        else:
-                            error.vs = int(match.group('vs'), 16)
-
-                        self.errors.append(error)
+        self.criticalWarning = data.get("nvme_smart_health_information_log").get("critical_warning")
+        self.temperature = data.get("nvme_smart_health_information_log").get("temperature")
+        self.availableSpare = data.get("nvme_smart_health_information_log").get("available_spare")
+        self.availableSpareThreshold = data.get("nvme_smart_health_information_log").get("available_spare_threshold")
+        self.percentageUsed = data.get("nvme_smart_health_information_log").get("percentage_used")
+        self.dataUnitsRead = data.get("nvme_smart_health_information_log").get("data_units_read")
+        self.dataUnitsWritten = data.get("nvme_smart_health_information_log").get("data_units_written")
+        self.hostReadCommands = data.get("nvme_smart_health_information_log").get("host_reads")
+        self.hostWriteCommands = data.get("nvme_smart_health_information_log").get("host_writes")
+        self.controllerBusyTime = data.get("nvme_smart_health_information_log").get("controller_busy_time")
+        self.powerCycles = data.get("nvme_smart_health_information_log").get("power_cycles")
+        self.powerOnHours = data.get("nvme_smart_health_information_log").get("power_on_hours")
+        self.unsafeShutdowns = data.get("nvme_smart_health_information_log").get("unsafe_shutdowns")
+        self.integrityErrors = data.get("nvme_smart_health_information_log").get("media_errors")
+        self.errorEntries = data.get("nvme_smart_health_information_log").get("num_err_log_entries")
+        self.warningTemperatureTime = data.get("nvme_smart_health_information_log").get("warning_temp_time")
+        self.criticalTemperatureTime = data.get("nvme_smart_health_information_log").get("critical_comp_time")
+        # todo: Parse error. Mine is: Error Information (NVMe Log 0x01, 16 of 256 entries) No Errors Logged :(
 
     def __getstate__(self, all_info=True):
         """

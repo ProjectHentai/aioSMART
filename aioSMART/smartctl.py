@@ -17,11 +17,15 @@
 ################################################################
 from asyncio.subprocess import PIPE
 import asyncio
-from .utils import SMARTCTL_PATH
+from .utils import SMARTCTL_PATH, any_in
 from typing import List, Tuple, Union, Optional
 
 import logging
 import os
+try:
+    import ujson as json
+except ImportError:
+    import json
 
 logger = logging.getLogger('aioSMART')
 
@@ -88,7 +92,7 @@ class Smartctl:
         """
         self.options = self.options + new_options
 
-    async def generic_call(self, params: List[str], pass_options=False) -> Tuple[List[str], int]:
+    async def generic_call(self, params: List[str], pass_options=False) -> Tuple[dict, int]:
         """Generic smartctl query
 
         Args:
@@ -117,7 +121,7 @@ class Smartctl:
 
         return await self._exec(popen_list)
 
-    async def try_generic_call(self, params: List[str], pass_options=False) -> Tuple[List[str], int]:
+    async def try_generic_call(self, params: List[str], pass_options=False) -> Tuple[dict, int]:
         """Generic smartctl query
            However, if the command fails or crashes, it will return an empty list and a return code of 1 instead of raising an exception
 
@@ -133,9 +137,9 @@ class Smartctl:
             return await self.generic_call(params, pass_options)
         except Exception as e:
             logger.debug(f"Exception while executing smartctl: {e}")
-            return [], 1
+            return {}, 1
 
-    async def _exec(self, cmd: List[str]) -> Tuple[List[str], int]:
+    async def _exec(self, cmd: List[str]) -> Tuple[dict, int]:
         """Executes a command and returns the output and the return code
 
         Args:
@@ -144,13 +148,15 @@ class Smartctl:
         Returns:
             Tuple[List[str], int]: A raw line-by-line output from smartctl and the process return code
         """
+        if not any_in(cmd, "-j", "--json"):
+            cmd.append("-j")  # use json to parse
         proc = await asyncio.create_subprocess_exec(cmd[0], *cmd[1:], stdout=PIPE, stderr=PIPE)
 
         _stdout, _stderr = [i.decode('utf8') for i in await proc.communicate()]
 
-        return _stdout.split('\n'), proc.returncode
+        return json.loads(_stdout), proc.returncode
 
-    async def scan(self) -> List[str]:
+    async def scan(self) -> dict:
         """Queries smartctl with option --scan-open
 
         Returns:
@@ -158,7 +164,7 @@ class Smartctl:
         """
         return (await self.generic_call(['--scan-open']))[0]
 
-    async def health(self, disk: str, interface: Optional[str] = None) -> List[str]:
+    async def health(self, disk: str, interface: Optional[str] = None) -> dict:
         """Queries smartctl with option --health
 
         Args:
@@ -173,7 +179,7 @@ class Smartctl:
         else:
             return (await self.generic_call(['--health', disk]))[0]
 
-    async def info(self, disk: str, interface: Optional[str] = None) -> List[str]:
+    async def info(self, disk: str, interface: Optional[str] = None) -> dict:
         """Queries smartctl with option --info
 
         Args:
@@ -185,11 +191,11 @@ class Smartctl:
         """
 
         if interface:
-            return (await self.generic_call(['-d', interface, '--info', disk], pass_options=True))[0]
+            return await (self.generic_call(['-d', interface, '--info', disk], pass_options=True))[0]
         else:
-            return (await self.generic_call(['--info', disk], pass_options=True))[0]
+            return await (self.generic_call(['--info', disk], pass_options=True))[0]
 
-    async def all(self, disk: str, interface: Optional[str] = None) -> List[str]:
+    async def all(self, disk: str, interface: Optional[str] = None) -> dict:
         """Queries smartctl with option --all
 
         Args:
@@ -217,7 +223,7 @@ class Smartctl:
         """
         return (await self.generic_call(['-d', disk_type, '-X', disk]))[1]
 
-    async def test_start(self, disk_type: str, test_type: str, disk: str) -> Tuple[List[str], int]:
+    async def test_start(self, disk_type: str, test_type: str, disk: str) -> Tuple[dict, int]:
         """Queries smartctl with option -t <test_type>
 
         Args:

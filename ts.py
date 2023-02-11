@@ -15,4 +15,9 @@ async def main():
         print(list(filter(lambda x: x, hdd.attributes)))
 
 
+async def ssd():
+    ssd = await Device.new("/dev/sdc")
+    print(f"发现 {ssd.model} 硬盘 容量{ssd.capacity} 温度 {ssd.temperature}")
+    print(list(filter(lambda x: x, ssd.attributes)))
+
 asyncio.run(main())
